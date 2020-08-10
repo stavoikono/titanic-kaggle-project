@@ -1,0 +1,163 @@
+---
+title: "Titanic Project"
+author: "Stavros Oikonomou"
+date: "22/3/2020"
+output: html_document
+---
+
+### Loading the libraries
+```{r,warning=FALSE,message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(randomForest)
+library(caret)
+```
+
+### Loading the data
+```{r}
+setwd("C:/Users/tit0v/R/titanic-kaggle-project")
+
+titanic.train <- read.table("train.csv", sep = ','
+                                  ,stringsAsFactors = TRUE, header = TRUE,na.strings =c(""," "))
+titanic.test <- read.table("test.csv", sep = ','
+                            ,stringsAsFactors = TRUE, header = TRUE,na.strings =c(""," "))
+```
+
+### Creating a extra column to help me split the dataset after bind
+```{r}
+titanic.train$istrain <- T
+titanic.test$istrain <- F
+```
+### Adding the survived column for test set
+```{r}
+titanic.test$Survived <- NA
+```
+### binding the train and test set
+```{r}
+titanic.full <- rbind(titanic.train,titanic.test)
+```
+### Categorical casting
+```{r}
+str(titanic.full)
+titanic.full$Pclass <- as.factor(titanic.full$Pclass)
+titanic.full$Parch <- as.factor(titanic.full$Parch)
+titanic.full$SibSp <- as.factor(titanic.full$SibSp)
+```
+### removing cabin column
+```{r}
+titanic.full$Cabin <- NULL
+```
+### Number of NA
+```{r}
+sapply(titanic.full, function(x) sum(is.na(x)))
+na.values.df <-sapply(titanic.full, function(x) sum(is.na(x)))
+na.values.df[na.values.df>0]
+
+```
+### removing Embarked NA
+```{r}
+titanic.full[is.na(titanic.full$Embarked), "Embarked"] <- "S"
+levels(titanic.train$Embarked)
+table(titanic.full$Embarked)
+```
+### Removing NA from Fare
+```{r}
+median(titanic.full$Fare, na.rm = T)
+titanic.full[is.na(titanic.full$Fare), ]
+titanic.full$Fare[is.na(titanic.full$Fare)] <- median(titanic.full$Fare, na.rm = T)
+```
+### removing NA from Age with Linear Regression
+```{r}
+top_quant <- boxplot.stats(titanic.full$Age)$stats[5]
+agee <- titanic.full[titanic.full$Age <= top_quant,]
+na.age <- titanic.full[is.na(titanic.full$Age),]
+lm_model <- lm(Age~Sex + SibSp + Pclass,
+               data=agee)
+
+age_pred <- predict(lm_model, newdata =na.age[c("Sex", "SibSp","Pclass")]  )
+titanic.full[is.na(titanic.full$Age),]$Age <- round(age_pred)
+```
+### Extracting the Title from Names
+```{r}
+titanic.full$Title <- vector("character",length=nrow(titanic.full))
+for (i in 1:nrow(titanic.full)) {
+   x <- as.character(titanic.full$Name[i])
+   m <- regexec(",(\\s+\\w+)+\\.", x) 
+   titanic.full$Title[i] <- unlist(strsplit(unlist(regmatches(x,m))," "))[2]
+}
+levels(as.factor(titanic.full$Title))
+titanic.full$Title[titanic.full$Title %in% c("Don.","Rev.","Dr.","Major.","Master.", "Sir.","Col.","Capt.","Jonkheer.")] <- "High class male"
+titanic.full$Title[titanic.full$Title %in% c("Dona.","Lady.","Mlle.","Mme.", "the", "Ms.")] <- "high class female"
+```
+### Split the data and loading the y_test
+```{r}
+titanic.train <- titanic.full[titanic.full$istrain==T,]
+titanic.test <- titanic.full[titanic.full$istrain==F,]
+titanic.train$Survived <- as.factor(titanic.train$Survived)
+titanic.train$Title <- as.factor(titanic.train$Title)
+titanic.test$Title <- as.factor(titanic.test$Title)
+str(titanic.train)
+
+y_test<- read.table("gender_submission.csv", sep = ','
+                    ,stringsAsFactors = TRUE, header = TRUE)
+```
+
+### Random Forest
+#### Fitting the model, as we can see there is no difference in OOB error after 100 trees
+```{r}
+rf_model <- randomForest(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + Title,
+                         data=titanic.train,nodesize = 0.01 * nrow(titanic.test))
+plot(rf_model)
+```
+
+
+```{r}
+tcontrol <- trainControl(method = "cv", number = 10, repeats = 3)
+tunegrid <- expand.grid(mtry = seq(2,12,2))
+modelRF <- train(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + Title, ntree=100,
+                 data=titanic.train, method = "rf",trControl = tcontrol, tuneGrid=tunegrid)
+print(modelRF)
+plot(modelRF)
+```
+
+```{r}
+plot(modelRF)
+```
+
+#### So we gonna choose 100 trees and 10 features
+
+### Random Forest
+```{r}
+rf2_model <- randomForest(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + Title, ntree=100,
+                         mtry=10,data=titanic.train,nodesize = 0.01 * nrow(titanic.test))
+pred_test <- predict(rf2_model, 
+                   newdata = titanic.test[c("Pclass","Sex","Age","SibSp","Parch","Fare","Embarked","Title")])
+pred_train <- predict(rf_model, 
+                     newdata = titanic.train[c("Pclass","Sex","Age","SibSp","Parch","Fare","Embarked","Title")])
+```
+### Confusion Matrix
+```{r}
+confusionMatrix(pred_test , as.factor(y_test$Survived))
+confusionMatrix(pred_train , as.factor(titanic.train$Survived))
+```
+
+### Cross validation
+```{r}
+tcontrol2 <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+modelRF2 <- train(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + Title, ntree=100,
+                 data=titanic.train, method = "rf",trControl = tcontrol2, tuneGrid=expand.grid(.mtry=c(10)))
+modelRF2$results
+```
+
+```{r}
+PassengerId <- titanic.test$PassengerId
+output.df <- as.data.frame(PassengerId)
+output.df$Survived <- pred_test
+
+write.csv(output.df, file="kaggle_rf.csv", row.names = F)
+```
+
+
+
+
+
